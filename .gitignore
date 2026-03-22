@@ -3,3 +3,5 @@ dist/
 .env
 .DS_Store
 npm-debug.log*
+SAD.md
+SRS.md
