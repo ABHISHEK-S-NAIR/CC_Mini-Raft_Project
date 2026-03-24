@@ -1,21 +1,45 @@
 # Project Status Report
 ## Distributed Real-Time Drawing Board with Mini-RAFT Consensus
 
-**Date:** March 22, 2026  
+**Date:** March 25, 2026  
 **Prepared for:** Project Team  
-**Status:** Partially Complete (Core Consensus Flow Working; Requirement Gaps Remaining)
+**Status:** Partially Complete (Core Consensus Flow Working; Frontend + Observability Layers Expanded; Requirement Gaps Remaining)
 
 ---
 
 ## 1) Executive Summary
 
-The project has a **functional mini distributed system** with:
-- A working Gateway service (WebSocket client ingress + commit broadcast)
-- Three Replica services with Mini-RAFT election, heartbeat, and log replication
-- A browser frontend canvas with optimistic drawing and pending/committed visual behavior
-- Docker Compose orchestration for all major runtime services
+The project now has a functional mini distributed drawing system with:
+- Gateway service (WebSocket ingress + commit broadcast)
+- Three replica services implementing Mini-RAFT election/heartbeat/replication
+- Frontend with optimistic drawing, pending/committed rendering, and multi-tool UI
+- Observability layer with structured logs, replica `/status`, and dashboard UI
 
-The system currently demonstrates the main happy-path behavior expected for a Mini-RAFT drawing board. However, it does **not yet fully satisfy all SRS/SAD requirements** for failover robustness, observability, hot-reload workflow, and requirement-grade reliability guarantees.
+The core distributed flow is stable for demo use. Full SRS/SAD compliance remains partial, primarily due to simplified failover handling, in-memory durability limits, and limited production-grade verification.
+
+### Update Since Last Report
+
+Newly confirmed in implementation:
+- Frontend collaboration enhancements: `undo`, `redo`, `clear`, shape tools, fill toggle, export, shortcuts.
+- Shared logger utility added (`packages/shared/src/logger.ts`) with:
+  - standardized event types,
+  - stdout structured format,
+  - circular buffer (last 100 events).
+- Replica `GET /status` endpoint added with live state + recent events.
+- Dashboard service added on port `3001` with:
+  - `GET /api/status` aggregated node state,
+  - `GET /api/events` SSE stream with deduplicated events,
+  - node cards and live event feed.
+- RAFT protocol timing is unchanged from baseline expectations:
+  - heartbeat interval: `150ms`,
+  - election timeout: `500–800ms`.
+- Log noise reduction implemented without changing consensus behavior:
+  - heartbeat/unreachable logs throttled to ~`3–5s` cadence via `HEARTBEAT_LOG_INTERVAL_MS`.
+
+Net effect:
+- UX and demo value improved.
+- Operational visibility improved significantly.
+- Core RAFT behavior remains unchanged.
 
 ---
 
@@ -24,45 +48,46 @@ The system currently demonstrates the main happy-path behavior expected for a Mi
 ### 2.1 Architecture and Runtime
 
 ✅ Implemented
-- Monorepo workspace with shared types package and separate gateway/replica services
-- 1 gateway + 3 replicas + 1 frontend container topology
-- Shared Docker network for inter-service communication
+- Monorepo with shared package + gateway + replica services + dashboard service
+- 1 gateway + 3 replicas + 1 frontend + 1 dashboard topology
+- Docker Compose orchestration on shared network
 
 ### 2.2 Frontend
 
 ✅ Implemented
-- HTML5 canvas drawing with pointer support
-- Optimistic local rendering of new strokes
-- Distinct pending stroke visualization
-- WebSocket reconnect behavior to gateway
-- Initial state sync from gateway (`init`) and commit updates (`committed`)
+- Canvas drawing with pointer support
+- Optimistic pending overlay and committed rendering
+- Multi-tool support: pen, line, rectangle, circle, eraser
+- Collaborative command actions: undo, redo, clear
+- Fill toggle, size/color controls, PNG download, keyboard shortcuts
 
-### 2.3 Gateway Service
+### 2.3 Gateway
 
 ✅ Implemented
-- Maintains active WebSocket client pool
-- Receives strokes from clients and forwards to current leader over HTTP (`/stroke`)
-- Receives leader commit notifications (`/commit-notify`)
-- Broadcasts committed strokes to all connected clients
-- Accepts explicit leader updates (`/leader-change`)
-- Health/state endpoints are available for inspection
+- WebSocket client pool management
+- Leader forwarding via `POST /stroke`
+- Commit handling via `POST /commit-notify`
+- Leader updates via `POST /leader-change`
+- Structured event logging for connect/disconnect/forward/broadcast/leader-change/unreachable
 
 ### 2.4 Replica / Mini-RAFT
 
 ✅ Implemented
-- RAFT roles: `follower`, `candidate`, `leader`
-- Election timeout randomization (configured defaults: 500–800 ms)
-- Vote RPC flow (`/request-vote`) and majority election
-- Leader heartbeat loop (`/heartbeat`, default 150 ms)
-- AppendEntries replication (`/append-entries`) with quorum commit logic
-- Sync endpoint (`/sync-log`) for lagging follower catch-up
-- Gateway notifications on leader change and entry commit
+- Roles: follower/candidate/leader
+- Election timeout randomization (500–800 ms)
+- Heartbeat loop (150 ms)
+- AppendEntries replication + quorum commit
+- Sync endpoint for lagging follower catch-up
+- Structured RAFT event logs
+- `GET /status` endpoint exposing live diagnostics
 
-### 2.5 Shared Protocol Contract
+### 2.5 Observability Dashboard
 
 ✅ Implemented
-- Shared TypeScript contracts for all RPC/WS payloads
-- Typed event model for client/server websocket messages
+- Dashboard service on `3001`
+- Aggregated node status API (`/api/status`)
+- SSE event stream (`/api/events`)
+- Live node cards with state coloring, heartbeat freshness, and lag indicator
 
 ---
 
@@ -71,84 +96,92 @@ The system currently demonstrates the main happy-path behavior expected for a Mi
 ### 3.1 Overall Compliance Score (Qualitative)
 
 - **Core distributed workflow:** Strong
-- **Fault-tolerant behavior under realistic failures:** Moderate
-- **Operational readiness / observability / reproducibility:** Moderate to Low
+- **Fault tolerance under realistic failures:** Moderate
+- **Operational readiness / observability:** Moderate
 - **Strict SRS conformance:** Partial
 
 ### 3.2 Functional Requirement Status
 
 | Area | Status | Notes |
 |---|---|---|
-| Frontend freehand drawing and optimistic rendering | ✅ Met | Core behavior implemented |
-| Pending vs committed visualization | ✅ Met | Pending overlay is visible |
-| Gateway WS client management | ✅ Met | Client pool and broadcast implemented |
-| Gateway forwards to leader | ✅ Met | Uses leader map and `/stroke` |
-| Explicit leader change handling | ✅ Met | `/leader-change` updates leader id |
-| Replica state machine and elections | ✅ Met | Candidate election + quorum vote |
-| Heartbeats and follower suppression | ✅ Met | Leader sends periodic heartbeats |
-| Majority-based commit | ✅ Met | Commit after quorum ACK |
-| Catch-up synchronization path | 🟡 Partial | Exists, but semantics are simplified |
-| Leader failover with uninterrupted UX guarantees | 🟡 Partial | Re-routing exists, but transient stroke failures can occur |
-| Dockerized 1+3 topology with distinct IDs | ✅ Met | Compose defines all services and env IDs |
-| Bind-mounted hot reload via nodemon | ❌ Not Met | Current compose/docker setup does not provide this mode |
+| Frontend freehand + optimistic rendering | ✅ Met | Core behavior implemented |
+| Frontend shape + eraser tooling | ✅ Implemented (Scope Extension) | Beyond baseline minimum |
+| Frontend undo/redo/clear collaboration | ✅ Implemented (Scope Extension) | Command-style committed events |
+| Pending vs committed visualization | ✅ Met | Clear visual distinction |
+| Gateway WS client management | ✅ Met | Client pool + broadcast |
+| Gateway forwards writes to leader | ✅ Met | Uses leader map and `/stroke` |
+| Explicit leader change handling | ✅ Met | `/leader-change` updates leader |
+| Replica state machine + elections | ✅ Met | Quorum voting and transitions |
+| Heartbeats and follower suppression | ✅ Met | Leader periodic heartbeats |
+| Quorum commit behavior | ✅ Met | Majority-based commit |
+| Catch-up synchronization path | 🟡 Partial | Present but simplified semantics |
+| Replica live status endpoint (`/status`) | ✅ Met | Exposes live state + recent events |
+| Structured event logging | ✅ Met | Shared format + event model |
+| Dashboard status + event stream | ✅ Implemented (Scope Extension) | Improves operational visibility |
+| Hot reload bind-mount workflow (FR-D02) | ❌ Not Met | Compose does not provide required mode |
 
 ---
 
 ## 4) Detailed Gaps and Missing Items
 
-### 4.1 Gateway Failover Behavior Is Simpler Than Spec Narrative
+### 4.1 Gateway Failover Behavior Still Simplified
 
 **Observed:**
-- Gateway updates leader primarily through explicit `/leader-change` notifications.
-- No active heartbeat-timeout-based probing/discovery mechanism is implemented in gateway.
+- Gateway relies primarily on explicit `/leader-change` updates.
+- No robust gateway-side discovery/retry strategy for unknown/stale leader.
 
 **Impact:**
-- During leader transitions, stroke forwarding can fail until new leader is known or stabilized.
-- This weakens strict interpretation of “automatic failover with zero user disruption.”
+- Temporary forwarding failures can occur during leader transitions.
 
-### 4.2 In-Memory State Only (Durability Gap)
+### 4.2 In-Memory Durability Gap
 
 **Observed:**
-- Replica log and gateway committed list are in-memory.
-- Restarting containers can lose local state.
+- Gateway committed state and replica logs are in-memory.
 
 **Impact:**
-- Limits compliance with strong fault-tolerance/data-loss claims in non-functional requirements.
-- Recovery behavior depends on current leader state and runtime conditions.
+- Restart scenarios can lose state and weaken fault-tolerance claims.
 
-### 4.3 Committed-Entry Safety Is Not Fully Guarded
+### 4.3 Commit-Safety Hardening Still Limited
 
 **Observed:**
-- Conflict handling and truncation logic exist.
-- There is no explicit invariant enforcement preventing truncation of already committed entries.
+- Core conflict handling exists, but committed-prefix invariants are not strongly guarded with explicit safety checks/tests.
 
 **Impact:**
-- Under edge conflict patterns, safety assumptions rely on control flow rather than hard guards.
+- Edge-case confidence remains limited.
 
-### 4.4 Limited Observability vs SRS Expectation
+### 4.4 Observability Improved But Still Basic
 
 **Observed:**
-- Minimal logging only; no structured audit logs for elections/terms/heartbeats/commits.
+- Structured logs, status endpoint, and live dashboard are implemented.
 
 **Impact:**
-- Harder to verify NFR behavior and debug distributed edge cases.
+- Debugging and demos are much better.
+- Still missing persistent log storage, metrics, alerting, and historical analysis.
 
-### 4.5 Hot-Reload Requirement Not Fully Satisfied
+### 4.5 Hot-Reload Workflow Requirement Gap
 
 **Observed:**
-- Dockerfiles run dev scripts with `tsx`.
-- Compose does not include replica bind mounts for live edit reload workflow described in SRS/SAD.
+- Dev execution uses `tsx`, but compose lacks bind-mounted hot-reload path expected by FR-D02 narrative.
 
 **Impact:**
-- Developer workflow and demo behavior do not fully align with FR-D02 and associated expectations.
+- Workflow does not fully align with SRS/SAD hot-reload expectations.
 
-### 4.6 Strict Performance/Recovery NFRs Are Unverified
+### 4.6 NFR Validation Still Pending
 
 **Observed:**
-- No benchmark, load, or automated failover timing tests currently embedded.
+- No embedded automated benchmarks for latency/recovery targets.
 
 **Impact:**
-- NFR claims such as ≤300 ms propagation and ≤3 s recoverability remain unproven.
+- NFR claims remain unproven.
+
+### 4.7 Shared Contract Coverage Gap for Command Tools
+
+**Observed:**
+- Runtime uses command tools (`undo`/`redo`/`clear`) in stroke payload behavior.
+- Shared `DrawingTool` currently models only drawing tools.
+
+**Impact:**
+- Type-model drift risk remains.
 
 ---
 
@@ -156,50 +189,53 @@ The system currently demonstrates the main happy-path behavior expected for a Mi
 
 | Risk | Severity | Likelihood | Why It Matters |
 |---|---|---|---|
-| Stroke forwarding failure during leader turnover | High | Medium | Affects perceived reliability during failover |
-| Data loss on full process/container restarts | High | Medium | In-memory-only state limits resilience |
-| Difficult production debugging due to low observability | Medium | High | Distributed bugs become expensive to diagnose |
-| Requirement mismatch in hot-reload workflow | Medium | High | Impacts evaluation against SRS/SAD deliverables |
-| Unverified latency/recovery targets | Medium | Medium | Hard to claim readiness without evidence |
+| Forwarding failure during leader turnover | High | Medium | Impacts reliability perception |
+| Data loss on full restart | High | Medium | In-memory-only resilience limit |
+| Dashboard blind spots during multi-node outage | Medium | Medium | No persistent event replay |
+| Requirement mismatch for hot reload rubric | Medium | High | Impacts grading/compliance |
+| Unverified latency/recovery targets | Medium | Medium | Readiness claims remain weak |
+| Schema drift for command tools | Medium | Medium | Runtime/type inconsistency risk |
 
 ---
 
 ## 6) Suggested Action Plan (Prioritized)
 
 ### Priority 1 — Reliability and Failover
-1. Add gateway-side retry/fallback behavior when `/stroke` to leader fails.
-2. Add gateway leader discovery fallback (probe replicas for current leader state) when forwarding fails.
-3. Improve non-leader response to provide actionable `leaderHint` if known.
+1. Add gateway-side retry/fallback on failed leader forwarding.
+2. Add leader discovery fallback when forwarding fails.
+3. Improve non-leader responses with actionable `leaderHint`.
 
 ### Priority 2 — Safety and Correctness
-4. Add explicit commit safety guards so committed entries cannot be truncated.
-5. Tighten sync semantics to ensure catch-up is aligned with committed-prefix safety.
+4. Add explicit committed-prefix safety guards.
+5. Strengthen sync semantics against committed-prefix invariants.
 
-### Priority 3 — Operational Readiness
-6. Add structured logs for election start/win/loss, term changes, heartbeats, append ACKs, commits, and sync events.
-7. Add simple health/diagnostic endpoints that expose leader view and replication lag per node.
+### Priority 3 — Observability Maturity
+6. Add persistent structured-log sink/export strategy.
+7. Add lightweight metrics and threshold alerting (election rate, commit latency, heartbeat freshness).
 
 ### Priority 4 — SRS Workflow Compliance
-8. Update Docker Compose for bind-mount + live reload workflow if required by grading rubric.
-9. Document developer run modes (demo mode vs hot-reload mode).
+8. Add optional bind-mount + hot-reload compose mode (if required by rubric).
+9. Document run profiles (demo mode vs hot-reload mode).
 
 ### Priority 5 — Verification
-10. Add targeted scenario tests/checklists for:
-   - Leader crash and election recovery
-   - Follower restart and sync catch-up
-   - Commit quorum behavior with one node down
-   - End-to-end latency sampling
+10. Add scenario-based validation checklist:
+   - leader crash/election recovery,
+   - follower restart/sync catch-up,
+   - quorum behavior with one node down,
+   - end-to-end latency sampling.
+11. Add UI-level parity checks for drawing tools.
+12. Align shared types with collaborative command operations.
 
 ---
 
 ## 7) Definition of “Done” for Next Milestone
 
-The next milestone should be considered complete when all of the following are true:
-- Failover forwarding and leader discovery are resilient enough to avoid user-facing stroke loss in single-node failure cases.
-- Safety invariants are explicit and test-backed for committed-prefix behavior.
-- Hot-reload/developer workflow matches documented SRS expectations (or the SRS is formally revised).
-- Observability and diagnostics are sufficient to demonstrate RAFT state transitions clearly.
-- NFR claims (latency and recovery) are validated with repeatable measurements.
+Next milestone is complete when:
+- Forwarding/failover handling avoids user-visible stroke loss for single-node failures.
+- Safety invariants are explicit and test-backed.
+- Observability includes persistent logs + basic metrics, not only live dashboard.
+- Hot-reload workflow is either implemented or formally scoped out in requirements.
+- NFR latency/recovery targets are measured and repeatable.
 
 ---
 
@@ -208,7 +244,8 @@ The next milestone should be considered complete when all of the following are t
 **Current project status:**
 - **Functionally viable demo:** Yes
 - **Core Mini-RAFT logic operational:** Yes
+- **Live observability dashboard available:** Yes
 - **Fully compliant with attached SAD/SRS:** No (partial)
 - **Ready for final acceptance without further work:** Not yet
 
-The project is in a strong intermediate state with core distributed behavior implemented. The remaining work is primarily around **robustness, formal requirement conformance, and verification depth** rather than basic feature construction.
+The project is in a strong intermediate state with solid core flow and materially improved observability. Remaining work is focused on robustness hardening, strict requirement conformance, and verification depth.

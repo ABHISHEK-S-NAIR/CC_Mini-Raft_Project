@@ -4,6 +4,7 @@ import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   CommitNotifyRequest,
+  createLogger,
   LeaderChangeRequest,
   LogEntry,
   StrokeIngressRequest,
@@ -22,6 +23,7 @@ app.use(express.json({ limit: "1mb" }));
 const gatewayPort = Number(process.env.GATEWAY_PORT || "3000");
 const replicaMap = parseReplicaMap(process.env.REPLICA_MAP || "");
 let currentLeaderId: string | null = Object.keys(replicaMap)[0] ?? null;
+const logger = createLogger("gateway");
 
 const clients = new Set<WebSocket>();
 const committedEntries: LogEntry[] = [];
@@ -41,15 +43,23 @@ function broadcast(payload: WsServerEvent): void {
 
 async function forwardStroke(message: StrokeIngressRequest): Promise<void> {
   if (!currentLeaderId || !replicaMap[currentLeaderId]) {
+    logger.log("NODE_UNREACHABLE", "Leader unknown - awaiting failover");
     throw new Error("No leader known by gateway");
   }
 
   const leaderUrl = replicaMap[currentLeaderId];
-  await axios.post(`${leaderUrl}/stroke`, message, { timeout: 800 });
+  try {
+    await axios.post(`${leaderUrl}/stroke`, message, { timeout: 800 });
+    logger.log("STROKE_FORWARDED", `Stroke forwarded to ${currentLeaderId}`);
+  } catch (error) {
+    logger.log("NODE_UNREACHABLE", `Leader ${currentLeaderId} unreachable - awaiting failover`);
+    throw error;
+  }
 }
 
 wss.on("connection", (ws) => {
   clients.add(ws);
+  logger.log("CLIENT_CONNECT", `Client connected | Total: ${clients.size}`);
 
   sendJson(ws, {
     type: "init",
@@ -69,12 +79,13 @@ wss.on("connection", (ws) => {
         stroke: event.stroke,
       });
     } catch (error) {
-      console.error("Gateway failed to process websocket message", error);
+      logger.log("NODE_UNREACHABLE", "Leader unreachable while processing client stroke");
     }
   });
 
   ws.on("close", () => {
     clients.delete(ws);
+    logger.log("CLIENT_DISCONNECT", `Client disconnected | Total: ${clients.size}`);
   });
 });
 
@@ -102,7 +113,7 @@ app.post("/leader-change", (req, res) => {
   }
 
   currentLeaderId = body.newLeaderId;
-  console.log(`Gateway switched leader to ${body.newLeaderId} term=${body.term}`);
+  logger.log("LEADER_CHANGE", `Leader updated -> ${body.newLeaderId} | Term: ${body.term}`);
   return res.json({ ok: true });
 });
 
@@ -129,10 +140,11 @@ app.post("/commit-notify", (req, res) => {
     stroke: body.stroke,
   };
   broadcast(payload);
+  logger.log("BROADCAST", `Committed stroke broadcast | Index: ${body.logIndex} | Clients: ${clients.size}`);
 
   return res.json({ ok: true });
 });
 
 server.listen(gatewayPort, () => {
-  console.log(`Gateway listening on :${gatewayPort}`);
+  logger.log("STARTUP", `Gateway listening on :${gatewayPort}`);
 });

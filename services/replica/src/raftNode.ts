@@ -2,11 +2,13 @@ import axios from "axios";
 import {
   AppendEntriesRequest,
   AppendEntriesResponse,
+  createLogger,
   HeartbeatRequest,
   LogEntry,
   NodeState,
   RequestVoteRequest,
   RequestVoteResponse,
+  ReplicaStatus,
   ReplicaStateSnapshot,
   Stroke,
 } from "@mini-raft/shared";
@@ -14,19 +16,27 @@ import { ReplicaConfig } from "./config";
 
 export class MiniRaftNode {
   private readonly config: ReplicaConfig;
+  private readonly logger: ReturnType<typeof createLogger>;
+  private lastHeartbeatSentLogAt = 0;
+  private lastHeartbeatReceivedLogAt = 0;
+  private lastUnreachableLogAtByPeer = new Map<string, number>();
   private state: NodeState = "follower";
   private currentTerm = 0;
   private votedFor: string | null = null;
+  private leaderId: string | null = null;
   private log: LogEntry[] = [];
   private commitIndex = 0;
+  private lastHeartbeatAt = Date.now();
   private electionTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
   constructor(config: ReplicaConfig) {
     this.config = config;
+    this.logger = createLogger(this.config.replicaId);
   }
 
   start(): void {
+    this.logger.log("STARTUP", `Started as FOLLOWER | Term: ${this.currentTerm}`);
     this.resetElectionTimer();
   }
 
@@ -41,6 +51,20 @@ export class MiniRaftNode {
     };
   }
 
+  getStatus(): ReplicaStatus {
+    return {
+      replicaId: this.config.replicaId,
+      state: this.state,
+      currentTerm: this.currentTerm,
+      votedFor: this.votedFor,
+      logLength: this.log.length,
+      commitIndex: this.commitIndex,
+      leaderId: this.getLeaderId(),
+      msSinceLastHeartbeat: this.getMsSinceLastHeartbeat(),
+      recentEvents: this.getRecentEvents(20),
+    };
+  }
+
   getLog(): LogEntry[] {
     return this.log;
   }
@@ -49,12 +73,55 @@ export class MiniRaftNode {
     return this.currentTerm;
   }
 
+  getLeaderId(): string | null {
+    return this.state === "leader" ? this.config.replicaId : this.leaderId;
+  }
+
+  getMsSinceLastHeartbeat(): number {
+    if (this.state === "leader") {
+      return 0;
+    }
+    return Math.max(0, Date.now() - this.lastHeartbeatAt);
+  }
+
+  getRecentEvents(n = 20) {
+    return this.logger.getRecentEvents(n);
+  }
+
+  private shouldLogHeartbeatSent(): boolean {
+    const now = Date.now();
+    if (now - this.lastHeartbeatSentLogAt < this.config.heartbeatLogIntervalMs) {
+      return false;
+    }
+    this.lastHeartbeatSentLogAt = now;
+    return true;
+  }
+
+  private shouldLogHeartbeatReceived(): boolean {
+    const now = Date.now();
+    if (now - this.lastHeartbeatReceivedLogAt < this.config.heartbeatLogIntervalMs) {
+      return false;
+    }
+    this.lastHeartbeatReceivedLogAt = now;
+    return true;
+  }
+
+  private logPeerUnreachable(peerId: string): void {
+    const now = Date.now();
+    const lastAt = this.lastUnreachableLogAtByPeer.get(peerId) ?? 0;
+    if (now - lastAt < this.config.heartbeatLogIntervalMs) {
+      return;
+    }
+    this.lastUnreachableLogAtByPeer.set(peerId, now);
+    this.logger.log("NODE_UNREACHABLE", `Could not reach ${peerId} - skipping`);
+  }
+
   isLeader(): boolean {
     return this.state === "leader";
   }
 
   getLeaderHint(): string {
-    return "unknown";
+    return this.getLeaderId() ?? "unknown";
   }
 
   async onRequestVote(req: RequestVoteRequest): Promise<RequestVoteResponse> {
@@ -63,7 +130,7 @@ export class MiniRaftNode {
     }
 
     if (req.term > this.currentTerm) {
-      this.becomeFollower(req.term);
+      this.becomeFollower(req.term, `Stepped down - higher term seen | Term: ${req.term}`);
     }
 
     const alreadyVoted = this.votedFor && this.votedFor !== req.candidateId;
@@ -72,6 +139,7 @@ export class MiniRaftNode {
     }
 
     this.votedFor = req.candidateId;
+    this.logger.log("VOTE_SENT", `Voted for ${req.candidateId} | Term: ${this.currentTerm}`);
     this.resetElectionTimer();
     return { term: this.currentTerm, voteGranted: true };
   }
@@ -83,7 +151,13 @@ export class MiniRaftNode {
 
     if (req.term >= this.currentTerm) {
       this.becomeFollower(req.term);
+      this.leaderId = req.leaderId;
+      this.lastHeartbeatAt = Date.now();
       this.resetElectionTimer();
+    }
+
+    if (this.shouldLogHeartbeatReceived()) {
+      this.logger.log("HEARTBEAT_RECEIVED", `Heartbeat from ${req.leaderId} | Term: ${req.term}`);
     }
 
     return { term: this.currentTerm, success: true };
@@ -96,8 +170,14 @@ export class MiniRaftNode {
 
     if (req.term >= this.currentTerm) {
       this.becomeFollower(req.term);
+      this.leaderId = req.leaderId;
+      this.lastHeartbeatAt = Date.now();
       this.resetElectionTimer();
     }
+
+    const targetIndex = req.entries.length > 0 ? req.entries[req.entries.length - 1].index : req.prevLogIndex;
+
+    this.logger.log("APPEND_RECEIVED", `AppendEntries from ${req.leaderId} | Index: ${targetIndex} | Term: ${req.term}`);
 
     if (req.prevLogIndex > this.log.length) {
       return { term: this.currentTerm, success: false, logLength: this.log.length };
@@ -121,14 +201,18 @@ export class MiniRaftNode {
       this.commitIndex = Math.min(req.leaderCommit, this.log.length);
     }
 
+    this.logger.log("APPEND_ACK", `ACK sent to ${req.leaderId} | Index: ${targetIndex}`);
+
     return { term: this.currentTerm, success: true, logLength: this.log.length };
   }
 
   onSyncLog(fromIndex: number, entries: LogEntry[]): { success: boolean; newLogLength: number } {
+    this.logger.log("SYNC_START", `Sync requested from index ${fromIndex}`);
     const start = Math.max(0, fromIndex);
     this.log = this.log.slice(0, start).concat(entries);
     this.commitIndex = this.log.length;
     this.resetElectionTimer();
+    this.logger.log("SYNC_COMPLETE", `Sync complete | Log length: ${this.log.length}`);
     return { success: true, newLogLength: this.log.length };
   }
 
@@ -149,6 +233,7 @@ export class MiniRaftNode {
 
     if (successCount >= quorum) {
       this.commitIndex = entry.index;
+      this.logger.log("COMMIT", `Entry committed | Index: ${entry.index} | Term: ${this.currentTerm}`);
       await this.notifyGatewayCommit(entry);
       return { committed: true, index: entry.index };
     }
@@ -176,13 +261,14 @@ export class MiniRaftNode {
     this.state = "candidate";
     this.currentTerm += 1;
     this.votedFor = this.config.replicaId;
+    this.logger.log("ELECTION_START", `No heartbeat - starting election | Term: ${this.currentTerm}`);
 
     let votes = 1;
     const peers = Object.entries(this.config.peers);
     const lastLogIndex = this.log.length;
     const lastLogTerm = this.log.length === 0 ? 0 : this.log[this.log.length - 1].term;
 
-    const requests = peers.map(async ([, url]) => {
+    const requests = peers.map(async ([peerId, url]) => {
       try {
         const payload: RequestVoteRequest = {
           term: this.currentTerm,
@@ -195,15 +281,16 @@ export class MiniRaftNode {
         });
 
         if (response.data.term > this.currentTerm) {
-          this.becomeFollower(response.data.term);
+          this.becomeFollower(response.data.term, `Stepped down - higher term seen | Term: ${response.data.term}`);
           return;
         }
 
         if (response.data.voteGranted) {
           votes += 1;
+          this.logger.log("VOTE_RECEIVED", `Vote received from ${peerId} | Term: ${this.currentTerm}`);
         }
       } catch {
-        // Peer can be down during election.
+        this.logger.log("NODE_UNREACHABLE", `Could not reach ${peerId} - skipping`);
       }
     });
 
@@ -215,10 +302,14 @@ export class MiniRaftNode {
       return;
     }
 
+    if (this.state === "candidate") {
+      this.logger.log("ELECTION_LOSS", `Election lost | Term: ${this.currentTerm} | Votes: ${votes}`);
+    }
+
     this.resetElectionTimer();
   }
 
-  private becomeFollower(term: number): void {
+  private becomeFollower(term: number, reason?: string): void {
     this.state = "follower";
     this.currentTerm = term;
     this.votedFor = null;
@@ -227,11 +318,19 @@ export class MiniRaftNode {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
+
+    if (reason) {
+      this.logger.log("ELECTION_LOSS", reason);
+    }
   }
 
   private becomeLeader(): void {
     this.state = "leader";
     this.votedFor = this.config.replicaId;
+    this.leaderId = this.config.replicaId;
+    this.lastHeartbeatAt = Date.now();
+    const quorum = Math.floor((Object.keys(this.config.peers).length + 1) / 2) + 1;
+    this.logger.log("ELECTION_WIN", `Won election | Term: ${this.currentTerm} | Votes: ${quorum}`);
 
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
@@ -250,9 +349,14 @@ export class MiniRaftNode {
       return;
     }
 
-    const peers = Object.values(this.config.peers);
+    const peers = Object.entries(this.config.peers);
+    const peerIds = peers.map(([peerId]) => peerId).join(", ");
+    if (this.shouldLogHeartbeatSent()) {
+      this.logger.log("HEARTBEAT_SENT", `Heartbeat sent to ${peerIds || "none"} | Term: ${this.currentTerm}`);
+    }
+
     await Promise.all(
-      peers.map(async (url) => {
+      peers.map(async ([peerId, url]) => {
         try {
           const payload: HeartbeatRequest = {
             term: this.currentTerm,
@@ -260,21 +364,21 @@ export class MiniRaftNode {
           };
           const response = await axios.post(`${url}/heartbeat`, payload, { timeout: 500 });
           if (response.data?.term > this.currentTerm) {
-            this.becomeFollower(response.data.term);
+            this.becomeFollower(response.data.term, `Stepped down - higher term seen | Term: ${response.data.term}`);
           }
         } catch {
-          // Peer may be unavailable.
+          this.logPeerUnreachable(peerId);
         }
       }),
     );
   }
 
   private async replicateEntry(entry: LogEntry): Promise<number> {
-    const peers = Object.values(this.config.peers);
+    const peers = Object.entries(this.config.peers);
     let successCount = 1;
 
     await Promise.all(
-      peers.map(async (url) => {
+      peers.map(async ([peerId, url]) => {
         try {
           const payload: AppendEntriesRequest = {
             term: this.currentTerm,
@@ -290,18 +394,19 @@ export class MiniRaftNode {
           });
 
           if (response.data.term > this.currentTerm) {
-            this.becomeFollower(response.data.term);
+            this.becomeFollower(response.data.term, `Stepped down - higher term seen | Term: ${response.data.term}`);
             return;
           }
 
           if (response.data.success) {
             successCount += 1;
+            this.logger.log("APPEND_ACK", `ACK received from ${peerId} | Index: ${entry.index}`);
             return;
           }
 
-          await this.syncFollower(url, response.data.logLength);
+          await this.syncFollower(peerId, url, response.data.logLength);
         } catch {
-          // Peer may be unavailable.
+          this.logPeerUnreachable(peerId);
         }
       }),
     );
@@ -309,12 +414,14 @@ export class MiniRaftNode {
     return successCount;
   }
 
-  private async syncFollower(url: string, followerLength: number): Promise<void> {
+  private async syncFollower(peerId: string, url: string, followerLength: number): Promise<void> {
     const start = Math.max(0, followerLength);
     const entries = this.log.slice(start);
     if (entries.length === 0) {
       return;
     }
+
+    this.logger.log("SYNC_START", `${peerId} is lagging - syncing from index ${start}`);
 
     try {
       await axios.post(
@@ -325,8 +432,9 @@ export class MiniRaftNode {
         },
         { timeout: 1000 },
       );
+      this.logger.log("SYNC_COMPLETE", `Sync complete | Log length: ${start + entries.length}`);
     } catch {
-      // Retry will happen in next replication cycle.
+      this.logPeerUnreachable(peerId);
     }
   }
 
@@ -340,8 +448,9 @@ export class MiniRaftNode {
         },
         { timeout: 600 },
       );
+      this.logger.log("LEADER_CHANGE", `New leader: ${this.config.replicaId} | Term: ${this.currentTerm}`);
     } catch {
-      // Gateway might not be up yet.
+      this.logger.log("NODE_UNREACHABLE", "Could not reach gateway - skipping leader notification");
     }
   }
 
@@ -356,7 +465,7 @@ export class MiniRaftNode {
         { timeout: 600 },
       );
     } catch {
-      // Gateway notification can be retried by future log replay endpoint.
+      this.logger.log("NODE_UNREACHABLE", "Could not reach gateway - skipping commit notification");
     }
   }
 }

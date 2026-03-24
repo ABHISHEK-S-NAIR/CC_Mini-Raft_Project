@@ -8,6 +8,7 @@ export interface ReplicaConfig {
   electionTimeoutMinMs: number;
   electionTimeoutMaxMs: number;
   heartbeatIntervalMs: number;
+  heartbeatLogIntervalMs: number;
 }
 
 export function loadConfig(): ReplicaConfig {
@@ -24,5 +25,6 @@ export function loadConfig(): ReplicaConfig {
     electionTimeoutMinMs: Number(process.env.ELECTION_TIMEOUT_MIN_MS || "500"),
     electionTimeoutMaxMs: Number(process.env.ELECTION_TIMEOUT_MAX_MS || "800"),
     heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS || "150"),
+    heartbeatLogIntervalMs: Number(process.env.HEARTBEAT_LOG_INTERVAL_MS || "4000"),
   };
 }

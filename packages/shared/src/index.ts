@@ -1,3 +1,5 @@
+import type { LogEvent } from "./logger";
+
 export type NodeState = "follower" | "candidate" | "leader";
 
 export interface Point {
@@ -124,6 +126,18 @@ export interface ReplicaStateSnapshot {
   logLength: number;
 }
 
+export interface ReplicaStatus {
+  replicaId: string;
+  state: NodeState;
+  currentTerm: number;
+  votedFor: string | null;
+  logLength: number;
+  commitIndex: number;
+  leaderId: string | null;
+  msSinceLastHeartbeat: number;
+  recentEvents: LogEvent[];
+}
+
 export function parseReplicaMap(value: string): Record<string, string> {
   return value
     .split(",")
@@ -137,3 +151,5 @@ export function parseReplicaMap(value: string): Record<string, string> {
       return acc;
     }, {});
 }
+
+export * from "./logger";

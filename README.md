@@ -9,6 +9,11 @@ A distributed collaborative drawing board built with:
 
 The system uses a simplified Mini-RAFT implementation to elect a leader and replicate drawing strokes across replica nodes.
 
+This version also includes an observability layer:
+- Structured event logs across gateway/replicas
+- Replica `GET /status` endpoint with live state snapshot + recent events
+- Dashboard service with node cards and live event feed
+
 ---
 
 ## 1) What this project does
@@ -95,12 +100,28 @@ flowchart TD
   - heartbeat (`/heartbeat`),
   - log replication (`/append-entries`),
   - catch-up sync (`/sync-log`),
-  - commit notification to gateway.
+  - commit notification to gateway,
+  - observability state via `GET /status`.
+
+### Dashboard
+
+- Location: `dashboard/src/index.ts` + `dashboard/public/index.html`
+- Responsibilities:
+  - poll replicas for `GET /status` via `GET /api/status`,
+  - stream deduplicated recent events via `GET /api/events` (SSE),
+  - render leader/follower/candidate/unreachable states and lag indicators.
 
 ### Shared contracts
 
 - Location: `packages/shared/src/index.ts`
 - Contains all common TypeScript interfaces for RPC and WebSocket payloads.
+
+### Shared logger
+
+- Location: `packages/shared/src/logger.ts`
+- Provides structured logger with stdout format:
+  - `[replicaId] [ISO timestamp] [EVENT_TYPE] message`
+- Maintains circular in-memory buffer (last 100 events) for dashboard/status consumption.
 
 ---
 
@@ -113,7 +134,14 @@ flowchart TD
 │       └── index.html
 ├── packages/
 │   └── shared/
-│       └── src/index.ts
+│       └── src/
+│           ├── index.ts
+│           └── logger.ts
+├── dashboard/
+│   ├── src/
+│   │   └── index.ts
+│   └── public/
+│       └── index.html
 ├── services/
 │   ├── gateway/
 │   │   └── src/index.ts
@@ -151,15 +179,20 @@ flowchart TD
 
 3. Open the drawing app:
 
-   - Frontend UI: http://localhost:8080
+  - Frontend UI: http://localhost:8080
+  - Dashboard UI: http://localhost:3001
 
 4. Open the service health endpoints (optional):
 
-   - Gateway health: http://localhost:3000/health
-   - Gateway state: http://localhost:3000/state
-   - Replica1 health: http://localhost:4001/health
-   - Replica2 health: http://localhost:4002/health
-   - Replica3 health: http://localhost:4003/health
+  - Gateway health: http://localhost:3000/health
+  - Gateway state: http://localhost:3000/state
+  - Replica1 health: http://localhost:4001/health
+  - Replica2 health: http://localhost:4002/health
+  - Replica3 health: http://localhost:4003/health
+  - Replica1 status: http://localhost:4001/status
+  - Replica2 status: http://localhost:4002/status
+  - Replica3 status: http://localhost:4003/status
+  - Dashboard aggregated status: http://localhost:3001/api/status
 
 5. Validate replication quickly:
 
@@ -211,6 +244,7 @@ docker compose down
 
 - Frontend (nginx): `8080`
 - Gateway: `3000`
+- Dashboard: `3001`
 - Replica1: `4001`
 - Replica2: `4002`
 - Replica3: `4003`
@@ -226,12 +260,19 @@ docker compose down
 ## Replica endpoints
 
 - `GET /health`
+- `GET /status`
 - `GET /debug/log`
 - `POST /stroke`
 - `POST /request-vote`
 - `POST /heartbeat`
 - `POST /append-entries`
 - `POST /sync-log`
+
+## Dashboard endpoints
+
+- `GET /` (dashboard UI)
+- `GET /api/status` (aggregated replica statuses)
+- `GET /api/events` (SSE event stream)
 
 ---
 
@@ -248,7 +289,7 @@ docker compose down
 
 - Services fail to start:
   - run `docker compose down` then `docker compose up --build` again,
-  - ensure no local process is already using ports 3000/4001/4002/4003/8080.
+  - ensure no local process is already using ports 3000/3001/4001/4002/4003/8080.
 
 ---
 
@@ -256,4 +297,6 @@ docker compose down
 
 - This is a Mini-RAFT educational implementation, intentionally simplified.
 - State is primarily in-memory; behavior across full restarts depends on current running cluster state.
-- For a production-grade version, expected additions include durable storage, stronger leader discovery/retry behavior, and richer observability.
+- Core RAFT timing is configured at heartbeat `150ms`, election timeout `500–800ms`.
+- Heartbeat log emission is intentionally throttled (default `HEARTBEAT_LOG_INTERVAL_MS=4000`) to keep logs event-focused while preserving protocol timing.
+- For a production-grade version, expected additions include durable storage, stronger leader discovery/retry behavior, and centralized observability/metrics.

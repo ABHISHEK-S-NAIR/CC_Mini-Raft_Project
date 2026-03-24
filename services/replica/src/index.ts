@@ -19,6 +19,10 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, ...node.getSnapshot() });
 });
 
+app.get("/status", (_req, res) => {
+  res.json(node.getStatus());
+});
+
 app.get("/debug/log", (_req, res) => {
   res.json({ entries: node.getLog() });
 });
@@ -68,5 +72,4 @@ app.post("/stroke", async (req, res) => {
 
 app.listen(config.port, () => {
   node.start();
-  console.log(`Replica ${config.replicaId} listening on :${config.port}`);
 });
