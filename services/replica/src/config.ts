@@ -5,6 +5,9 @@ export interface ReplicaConfig {
   port: number;
   peers: Record<string, string>;
   gatewayUrl: string;
+  gatewayNotifyTimeoutMs: number;
+  gatewayNotifyMaxAttempts: number;
+  gatewayNotifyRetryDelayMs: number;
   electionTimeoutMinMs: number;
   electionTimeoutMaxMs: number;
   heartbeatIntervalMs: number;
@@ -22,6 +25,9 @@ export function loadConfig(): ReplicaConfig {
     port,
     peers,
     gatewayUrl,
+    gatewayNotifyTimeoutMs: Number(process.env.GATEWAY_NOTIFY_TIMEOUT_MS || "600"),
+    gatewayNotifyMaxAttempts: Math.max(1, Number(process.env.GATEWAY_NOTIFY_MAX_ATTEMPTS || "3")),
+    gatewayNotifyRetryDelayMs: Math.max(0, Number(process.env.GATEWAY_NOTIFY_RETRY_DELAY_MS || "200")),
     electionTimeoutMinMs: Number(process.env.ELECTION_TIMEOUT_MIN_MS || "500"),
     electionTimeoutMaxMs: Number(process.env.ELECTION_TIMEOUT_MAX_MS || "800"),
     heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS || "150"),

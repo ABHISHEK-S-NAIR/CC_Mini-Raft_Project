@@ -439,33 +439,47 @@ export class MiniRaftNode {
   }
 
   private async notifyGatewayLeaderChange(): Promise<void> {
-    try {
-      await axios.post(
-        `${this.config.gatewayUrl}/leader-change`,
-        {
-          newLeaderId: this.config.replicaId,
-          term: this.currentTerm,
-        },
-        { timeout: 600 },
-      );
+    const delivered = await this.postGatewayWithRetries("/leader-change", {
+      newLeaderId: this.config.replicaId,
+      term: this.currentTerm,
+    });
+
+    if (delivered) {
       this.logger.log("LEADER_CHANGE", `New leader: ${this.config.replicaId} | Term: ${this.currentTerm}`);
-    } catch {
+    } else {
       this.logger.log("NODE_UNREACHABLE", "Could not reach gateway - skipping leader notification");
     }
   }
 
   private async notifyGatewayCommit(entry: LogEntry): Promise<void> {
-    try {
-      await axios.post(
-        `${this.config.gatewayUrl}/commit-notify`,
-        {
-          logIndex: entry.index,
-          stroke: entry.stroke,
-        },
-        { timeout: 600 },
-      );
-    } catch {
+    const delivered = await this.postGatewayWithRetries("/commit-notify", {
+      logIndex: entry.index,
+      stroke: entry.stroke,
+    });
+
+    if (!delivered) {
       this.logger.log("NODE_UNREACHABLE", "Could not reach gateway - skipping commit notification");
     }
+  }
+
+  private async postGatewayWithRetries(path: string, payload: unknown): Promise<boolean> {
+    for (let attempt = 1; attempt <= this.config.gatewayNotifyMaxAttempts; attempt += 1) {
+      try {
+        await axios.post(`${this.config.gatewayUrl}${path}`, payload, {
+          timeout: this.config.gatewayNotifyTimeoutMs,
+        });
+        return true;
+      } catch {
+        if (attempt === this.config.gatewayNotifyMaxAttempts) {
+          return false;
+        }
+
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, this.config.gatewayNotifyRetryDelayMs * attempt);
+        });
+      }
+    }
+
+    return false;
   }
 }
