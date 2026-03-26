@@ -29,6 +29,7 @@ export class MiniRaftNode {
   private lastHeartbeatAt = Date.now();
   private electionTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private heartbeatingPeers = new Set<string>();
 
   constructor(config: ReplicaConfig) {
     this.config = config;
@@ -156,6 +157,10 @@ export class MiniRaftNode {
       this.resetElectionTimer();
     }
 
+    if (req.leaderCommit !== undefined && req.leaderCommit > this.commitIndex) {
+      this.commitIndex = Math.min(req.leaderCommit, this.log.length);
+    }
+
     if (this.shouldLogHeartbeatReceived()) {
       this.logger.log("HEARTBEAT_RECEIVED", `Heartbeat from ${req.leaderId} | Term: ${req.term}`);
     }
@@ -234,7 +239,8 @@ export class MiniRaftNode {
     if (successCount >= quorum) {
       this.commitIndex = entry.index;
       this.logger.log("COMMIT", `Entry committed | Index: ${entry.index} | Term: ${this.currentTerm}`);
-      await this.notifyGatewayCommit(entry);
+      void this.notifyGatewayCommit(entry);
+      void this.sendHeartbeats();
       return { committed: true, index: entry.index };
     }
 
@@ -270,55 +276,55 @@ export class MiniRaftNode {
     const quorum = Math.floor((peers.length + 1) / 2) + 1;
 
     if (votes >= quorum) {
-      this.becomeLeader();
+      this.becomeLeader(votes);
       return;
     }
 
-    await new Promise<void>((resolve) => {
-      let completedCount = 0;
+    let resolveElection!: () => void;
+    const electionPromise = new Promise<void>((r) => { resolveElection = r; });
 
-      peers.forEach(async ([peerId, url]) => {
-        try {
-          const payload: RequestVoteRequest = {
-            term: this.currentTerm,
-            candidateId: this.config.replicaId,
-            lastLogIndex,
-            lastLogTerm,
-          };
-          const response = await axios.post<RequestVoteResponse>(`${url}/request-vote`, payload, {
-            timeout: 500,
-          });
+    const promises = peers.map(async ([peerId, url]) => {
+      try {
+        const payload: RequestVoteRequest = {
+          term: this.currentTerm,
+          candidateId: this.config.replicaId,
+          lastLogIndex,
+          lastLogTerm,
+        };
+        const response = await axios.post<RequestVoteResponse>(`${url}/request-vote`, payload, {
+          timeout: 500,
+        });
 
-          if (this.state !== "candidate") {
-            return;
-          }
-
-          if (response.data.term > this.currentTerm) {
-            this.becomeFollower(response.data.term, `Stepped down - higher term seen | Term: ${response.data.term}`);
-            resolve();
-            return;
-          }
-
-          if (response.data.voteGranted) {
-            votes += 1;
-            this.logger.log("VOTE_RECEIVED", `Vote received from ${peerId} | Term: ${this.currentTerm}`);
-            if (votes === quorum) {
-              resolve();
-            }
-          }
-        } catch {
-          this.logger.log("NODE_UNREACHABLE", `Could not reach ${peerId} - skipping`);
-        } finally {
-          completedCount += 1;
-          if (completedCount === peers.length) {
-            resolve();
-          }
+        if (this.state !== "candidate") {
+          return false;
         }
-      });
+
+        if (response.data.term > this.currentTerm) {
+          this.becomeFollower(response.data.term, `Stepped down - higher term seen | Term: ${response.data.term}`);
+          resolveElection();
+          return false;
+        }
+
+        if (response.data.voteGranted) {
+          votes += 1;
+          this.logger.log("VOTE_RECEIVED", `Vote received from ${peerId} | Term: ${this.currentTerm}`);
+          if (votes >= quorum) {
+            resolveElection();
+          }
+          return true;
+        }
+        return false;
+      } catch {
+        this.logger.log("NODE_UNREACHABLE", `Could not reach ${peerId} - skipping`);
+        return false;
+      }
     });
 
+    Promise.allSettled(promises).then(resolveElection);
+    await electionPromise;
+
     if (this.state === "candidate" && votes >= quorum) {
-      this.becomeLeader();
+      this.becomeLeader(votes);
       return;
     }
 
@@ -343,13 +349,17 @@ export class MiniRaftNode {
     }
   }
 
-  private becomeLeader(): void {
+  private becomeLeader(votes: number): void {
+    if (this.electionTimer) {
+      clearTimeout(this.electionTimer);
+      this.electionTimer = null;
+    }
+
     this.state = "leader";
     this.votedFor = this.config.replicaId;
     this.leaderId = this.config.replicaId;
     this.lastHeartbeatAt = Date.now();
-    const quorum = Math.floor((Object.keys(this.config.peers).length + 1) / 2) + 1;
-    this.logger.log("ELECTION_WIN", `Won election | Term: ${this.currentTerm} | Votes: ${quorum}`);
+    this.logger.log("ELECTION_WIN", `Won election | Term: ${this.currentTerm} | Votes: ${votes}`);
 
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
@@ -374,22 +384,31 @@ export class MiniRaftNode {
       this.logger.log("HEARTBEAT_SENT", `Heartbeat sent to ${peerIds || "none"} | Term: ${this.currentTerm}`);
     }
 
-    await Promise.all(
-      peers.map(async ([peerId, url]) => {
-        try {
-          const payload: HeartbeatRequest = {
-            term: this.currentTerm,
-            leaderId: this.config.replicaId,
-          };
-          const response = await axios.post(`${url}/heartbeat`, payload, { timeout: 500 });
+    for (const [peerId, url] of peers) {
+      if (this.heartbeatingPeers.has(peerId)) {
+        continue;
+      }
+
+      this.heartbeatingPeers.add(peerId);
+      const payload: HeartbeatRequest = {
+        term: this.currentTerm,
+        leaderId: this.config.replicaId,
+        leaderCommit: this.commitIndex,
+      };
+
+      axios.post(`${url}/heartbeat`, payload, { timeout: 500 })
+        .then((response) => {
           if (response.data?.term > this.currentTerm) {
             this.becomeFollower(response.data.term, `Stepped down - higher term seen | Term: ${response.data.term}`);
           }
-        } catch {
+        })
+        .catch(() => {
           this.logPeerUnreachable(peerId);
-        }
-      }),
-    );
+        })
+        .finally(() => {
+          this.heartbeatingPeers.delete(peerId);
+        });
+    }
   }
 
   private async replicateEntry(entry: LogEntry): Promise<number> {
@@ -401,45 +420,47 @@ export class MiniRaftNode {
       return successCount;
     }
 
-    return new Promise((resolve) => {
-      let completedCount = 0;
+    let resolveQuorum!: (v: number) => void;
+    const quorumPromise = new Promise<number>((r) => { resolveQuorum = r; });
 
-      peers.forEach(async ([peerId, url]) => {
-        try {
-          const payload: AppendEntriesRequest = {
-            term: this.currentTerm,
-            leaderId: this.config.replicaId,
-            prevLogIndex: entry.index - 1,
-            prevLogTerm: entry.index > 1 ? this.log[entry.index - 2].term : 0,
-            entries: [entry],
-            leaderCommit: this.commitIndex,
-          };
+    const promises = peers.map(async ([peerId, url]) => {
+      try {
+        const payload: AppendEntriesRequest = {
+          term: this.currentTerm,
+          leaderId: this.config.replicaId,
+          prevLogIndex: entry.index - 1,
+          prevLogTerm: entry.index > 1 ? this.log[entry.index - 2].term : 0,
+          entries: [entry],
+          leaderCommit: this.commitIndex,
+        };
 
-          const response = await axios.post<AppendEntriesResponse>(`${url}/append-entries`, payload, {
-            timeout: 700,
-          });
+        const response = await axios.post<AppendEntriesResponse>(`${url}/append-entries`, payload, {
+          timeout: 700,
+        });
 
-          if (response.data.term > this.currentTerm) {
-            this.becomeFollower(response.data.term, `Stepped down - higher term seen | Term: ${response.data.term}`);
-          } else if (response.data.success) {
-            successCount += 1;
-            this.logger.log("APPEND_ACK", `ACK received from ${peerId} | Index: ${entry.index}`);
-            if (successCount === quorum) {
-              resolve(successCount);
-            }
-          } else {
-            await this.syncFollower(peerId, url, response.data.logLength);
+        if (response.data.term > this.currentTerm) {
+          this.becomeFollower(response.data.term, `Stepped down - higher term seen | Term: ${response.data.term}`);
+          resolveQuorum(successCount);
+          return false;
+        } else if (response.data.success) {
+          successCount += 1;
+          this.logger.log("APPEND_ACK", `ACK received from ${peerId} | Index: ${entry.index}`);
+          if (successCount >= quorum) {
+            resolveQuorum(successCount);
           }
-        } catch {
-          this.logPeerUnreachable(peerId);
-        } finally {
-          completedCount += 1;
-          if (completedCount === peers.length) {
-            resolve(successCount);
-          }
+          return true;
+        } else {
+          await this.syncFollower(peerId, url, response.data.logLength);
+          return false;
         }
-      });
+      } catch {
+        this.logPeerUnreachable(peerId);
+        return false;
+      }
     });
+
+    Promise.allSettled(promises).then(() => resolveQuorum(successCount));
+    return quorumPromise;
   }
 
   private async syncFollower(peerId: string, url: string, followerLength: number): Promise<void> {

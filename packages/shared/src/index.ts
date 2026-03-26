@@ -52,6 +52,7 @@ export interface AppendEntriesResponse {
 export interface HeartbeatRequest {
   term: number;
   leaderId: string;
+  leaderCommit: number;
 }
 
 export interface HeartbeatResponse {

@@ -27,6 +27,7 @@ const logger = createLogger("gateway");
 
 const clients = new Set<WebSocket>();
 const committedEntries: LogEntry[] = [];
+const pendingStrokes = new Set<string>();
 
 function sendJson(ws: WebSocket, payload: WsServerEvent): void {
   ws.send(JSON.stringify(payload));
@@ -41,7 +42,12 @@ function broadcast(payload: WsServerEvent): void {
   }
 }
 
-async function forwardStroke(ws: WebSocket, localId: string, message: StrokeIngressRequest): Promise<void> {
+async function forwardStroke(ws: WebSocket, localId: string, message: StrokeIngressRequest, isRetry = false): Promise<void> {
+  if (!isRetry) {
+    if (pendingStrokes.has(localId)) return;
+    pendingStrokes.add(localId);
+  }
+
   let attemptLeaderId = currentLeaderId;
 
   const tryPost = async (leaderId: string) => {
@@ -49,18 +55,40 @@ async function forwardStroke(ws: WebSocket, localId: string, message: StrokeIngr
     return axios.post(`${leaderUrl}/stroke`, message, { timeout: 800 });
   };
 
-  const doProbeStr = async () => {
-    const probePromises = Object.entries(replicaMap).map(async ([id, url]) => {
-      try {
-        const res = await axios.get(`${url}/status`, { timeout: 500 });
-        if (res.data?.state === "leader") {
-          return id;
-        }
-      } catch {
-        return null;
+  const handleCommitted = (response: any, leaderId: string) => {
+    const data = response.data;
+    if (data?.committed && typeof data.logIndex === "number") {
+      if (!committedEntries.some((e) => e.index === data.logIndex)) {
+        const entry: LogEntry = { index: data.logIndex, term: 0, stroke: message.stroke };
+        committedEntries.push(entry);
+        const payload: WsServerCommittedEvent = {
+          type: "committed",
+          logIndex: data.logIndex,
+          stroke: message.stroke,
+        };
+        broadcast(payload);
+        logger.log("BROADCAST", `Committed stroke broadcast | Index: ${data.logIndex} | Clients: ${clients.size}`);
       }
-      return null;
-    });
+    }
+    logger.log("STROKE_FORWARDED", `Stroke forwarded to ${leaderId}`);
+    currentLeaderId = leaderId;
+    pendingStrokes.delete(localId);
+  };
+
+  const doProbeStr = async (skipId?: string) => {
+    const probePromises = Object.entries(replicaMap)
+      .filter(([id]) => id !== skipId)
+      .map(async ([id, url]) => {
+        try {
+          const res = await axios.get(`${url}/status`, { timeout: 500 });
+          if (res.data?.state === "leader") {
+            return id;
+          }
+        } catch {
+          return null;
+        }
+        return null;
+      });
     const results = await Promise.all(probePromises);
     return results.find((id) => id !== null) || null;
   };
@@ -71,18 +99,16 @@ async function forwardStroke(ws: WebSocket, localId: string, message: StrokeIngr
 
   if (attemptLeaderId && replicaMap[attemptLeaderId]) {
     try {
-      await tryPost(attemptLeaderId);
-      logger.log("STROKE_FORWARDED", `Stroke forwarded to ${attemptLeaderId}`);
-      currentLeaderId = attemptLeaderId;
+      const response = await tryPost(attemptLeaderId);
+      handleCommitted(response, attemptLeaderId);
       return;
     } catch (error: any) {
       const hint = error.response?.data?.leaderHint;
       if (hint && replicaMap[hint]) {
         logger.log("NODE_UNREACHABLE", `Leader hint received -> ${hint}`);
         try {
-          await tryPost(hint);
-          logger.log("STROKE_FORWARDED", `Stroke forwarded to ${hint} (via hint)`);
-          currentLeaderId = hint;
+          const response = await tryPost(hint);
+          handleCommitted(response, hint);
           return;
         } catch (hintError) {
           // hint failed, fall through to probe
@@ -90,13 +116,13 @@ async function forwardStroke(ws: WebSocket, localId: string, message: StrokeIngr
       }
 
       logger.log("NODE_UNREACHABLE", `Leader ${attemptLeaderId} unreachable - probing network`);
-      const probedLeader = await doProbeStr();
+      const probedLeader = await doProbeStr(attemptLeaderId);
       if (probedLeader) {
         logger.log("LEADER_CHANGE", `Leader discovered via probe -> ${probedLeader}`);
         currentLeaderId = probedLeader;
         try {
-          await tryPost(probedLeader);
-          logger.log("STROKE_FORWARDED", `Stroke forwarded to ${probedLeader} (via probe)`);
+          const response = await tryPost(probedLeader);
+          handleCommitted(response, probedLeader);
           return;
         } catch (e) {
           // probe failed, fall to re-queue
@@ -108,8 +134,9 @@ async function forwardStroke(ws: WebSocket, localId: string, message: StrokeIngr
   logger.log("NODE_UNREACHABLE", "No leader found - queuing for retry in 500ms");
   sendJson(ws, { type: "pending", localId });
   setTimeout(() => {
-    forwardStroke(ws, localId, message).catch(() => {
+    forwardStroke(ws, localId, message, true).catch(() => {
       logger.log("NODE_UNREACHABLE", "Leader unreachable after queued retry");
+      pendingStrokes.delete(localId);
     });
   }, 500);
 }
@@ -130,7 +157,6 @@ wss.on("connection", (ws) => {
         return;
       }
 
-      sendJson(ws, { type: "pending", localId: event.localId });
       await forwardStroke(ws, event.localId, {
         clientId: event.localId,
         stroke: event.stroke,
@@ -142,6 +168,7 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     clients.delete(ws);
+    // clean up any pending strokes from this client if needed
     logger.log("CLIENT_DISCONNECT", `Client disconnected | Total: ${clients.size}`);
   });
 });

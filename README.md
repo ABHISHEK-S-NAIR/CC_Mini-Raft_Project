@@ -85,8 +85,11 @@ flowchart TD
 - Responsibilities:
   - maintain WebSocket client connections,
   - forward incoming strokes to current leader via HTTP,
-  - receive commit notifications and broadcast committed events,
-  - track leader changes.
+  - multi-tier failover on forward failure: leaderHint → parallel probe (skipping dead node) → 500ms requeue,
+  - inline commit broadcast: when the leader responds with `committed: true`, the gateway broadcasts immediately to all WebSocket clients,
+  - fallback commit handling via `POST /commit-notify` (with dedup),
+  - in-flight stroke dedup via `pendingStrokes` tracking,
+  - track leader changes via `POST /leader-change`.
 
 ### Replicas (Mini-RAFT)
 
@@ -96,11 +99,12 @@ flowchart TD
   - candidate,
   - leader.
 - Responsibilities:
-  - leader election (`/request-vote`),
-  - heartbeat (`/heartbeat`),
-  - log replication (`/append-entries`),
-  - catch-up sync (`/sync-log`),
-  - commit notification to gateway,
+  - leader election (`/request-vote`) with `Promise.allSettled` and early quorum resolution,
+  - per-peer heartbeat dispatch (`/heartbeat`) with `leaderCommit` synchronization and in-flight tracking,
+  - log replication (`/append-entries`) with early quorum resolution,
+  - catch-up sync (`/sync-log`) with awaited `syncFollower`,
+  - `leaderHint` responses from non-leader `/stroke` handlers (409 with hint),
+  - async commit notification to gateway (fire-and-forget),
   - observability state via `GET /status`.
 
 ### Dashboard
@@ -215,10 +219,12 @@ docker compose down
 1. Client sends `{ type: "stroke", stroke, localId }` to gateway over WebSocket.
 2. Gateway forwards stroke to current leader via `POST /stroke`.
 3. Leader appends stroke as a new log entry.
-4. Leader sends `POST /append-entries` to followers.
+4. Leader sends `POST /append-entries` to followers (resolves on quorum, does not block on dead peers).
 5. After majority success, leader marks entry committed.
-6. Leader sends `POST /commit-notify` to gateway.
-7. Gateway broadcasts committed event to all clients.
+6. Leader responds to gateway with `{ committed: true, logIndex }`.
+7. Gateway immediately broadcasts committed event to all WebSocket clients.
+8. Leader also fires `POST /commit-notify` to gateway in background (dedup-safe fallback).
+9. Leader fires an immediate heartbeat to push `leaderCommit` to followers.
 
 ### B) Election and failover path
 
@@ -226,8 +232,10 @@ docker compose down
 2. If heartbeat times out, a follower becomes candidate.
 3. Candidate increments term, votes for self, requests votes.
 4. On majority votes, candidate becomes leader.
-5. New leader notifies gateway via `POST /leader-change`.
-6. Gateway routes new writes to the updated leader.
+5. New leader clears election timer, starts per-peer heartbeat dispatch.
+6. New leader notifies gateway via `POST /leader-change`.
+7. Gateway routes new writes to the updated leader.
+8. If gateway's cached leader is stale, stroke forwarding falls back through: leaderHint → parallel probe (skipping dead node) → 500ms requeue.
 
 ### C) Catch-up path
 
@@ -293,10 +301,32 @@ docker compose down
 
 ---
 
-## 9) Development notes
+## 9) Testing failover
+
+1. Start the cluster in detached mode:
+   ```bash
+   docker compose up -d --build
+   ```
+2. Open the frontend at `http://localhost:8080` and draw a few strokes to confirm the system is working.
+3. Kill a specific replica (e.g., the current leader):
+   ```bash
+   docker stop cc_mini-raft_project-replica1-1
+   ```
+4. Draw more strokes — they should appear normally on the canvas. The remaining two replicas will elect a new leader and the gateway will discover it automatically.
+5. Restart the dead replica:
+   ```bash
+   docker start cc_mini-raft_project-replica1-1
+   ```
+6. The restarted replica will rejoin as a follower and sync its log via the catch-up mechanism.
+
+> **Note:** Always use `docker compose up -d` (detached mode) for failover testing. Running attached (`docker compose up`) will cause Docker Compose to shut down all containers when one is stopped.
+
+---
+
+## 10) Development notes
 
 - This is a Mini-RAFT educational implementation, intentionally simplified.
 - State is primarily in-memory; behavior across full restarts depends on current running cluster state.
 - Core RAFT timing is configured at heartbeat `150ms`, election timeout `500–800ms`.
 - Heartbeat log emission is intentionally throttled (default `HEARTBEAT_LOG_INTERVAL_MS=4000`) to keep logs event-focused while preserving protocol timing.
-- For a production-grade version, expected additions include durable storage, stronger leader discovery/retry behavior, and centralized observability/metrics.
+- For a production-grade version, expected additions include durable storage and centralized observability/metrics.
