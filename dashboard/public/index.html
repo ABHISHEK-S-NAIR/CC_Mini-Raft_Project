@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mini-RAFT Dashboard</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #121a2d;
+        --panel-2: #0f1628;
+        --text: #e6ebff;
+        --muted: #9eabc9;
+        --green: #22c55e;
+        --blue: #3b82f6;
+        --amber: #f59e0b;
+        --red: #ef4444;
+        --line: #24314d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        background: radial-gradient(circle at top, #151e37, var(--bg) 48%);
+        color: var(--text);
+        min-height: 100vh;
+      }
+
+      .wrap {
+        max-width: 1150px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 1.25rem;
+      }
+
+      .updated {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 2px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+      }
+
+      .card.leader {
+        border-color: var(--green);
+      }
+
+      .card.follower {
+        border-color: var(--blue);
+      }
+
+      .card.candidate {
+        border-color: var(--amber);
+      }
+
+      .card.unreachable {
+        border-color: var(--red);
+      }
+
+      .card-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+
+      .node-name {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .badge {
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-size: 0.74rem;
+        border: 1px solid transparent;
+      }
+
+      .badge.leader {
+        background: #153722;
+        border-color: #1b5f36;
+        color: #aaf3c8;
+      }
+
+      .badge.follower {
+        background: #132a52;
+        border-color: #1d3c78;
+        color: #b9d6ff;
+      }
+
+      .badge.candidate {
+        background: #4b2d0e;
+        border-color: #7a4f18;
+        color: #ffd58b;
+      }
+
+      .badge.unreachable {
+        background: #4f1920;
+        border-color: #822131;
+        color: #ffc6cf;
+      }
+
+      .meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        font-size: 0.9rem;
+      }
+
+      .meta div {
+        background: var(--panel-2);
+        border-radius: 8px;
+        padding: 7px 8px;
+      }
+
+      .label {
+        display: block;
+        font-size: 0.74rem;
+        color: var(--muted);
+      }
+
+      .value {
+        font-size: 0.95rem;
+      }
+
+      .hb-amber {
+        color: var(--amber);
+      }
+
+      .hb-red {
+        color: var(--red);
+      }
+
+      .feed-shell {
+        margin-top: 14px;
+        border: 2px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+      }
+
+      .feed-header {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        font-weight: 600;
+      }
+
+      .feed {
+        max-height: 420px;
+        overflow: auto;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 0.84rem;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 95px 100px 170px 1fr;
+        gap: 8px;
+        padding: 7px 10px;
+        border-bottom: 1px solid #1f2a44;
+      }
+
+      .row:last-child {
+        border-bottom: 0;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .event-election {
+        color: var(--amber);
+      }
+
+      .event-commit {
+        color: var(--green);
+      }
+
+      .event-error {
+        color: var(--red);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="header">
+        <h1 class="title">Mini-RAFT Dashboard</h1>
+        <div class="updated" id="updatedAt">Last updated: --</div>
+      </header>
+
+      <section class="cards" id="cards"></section>
+
+      <section class="feed-shell">
+        <div class="feed-header">Live Event Feed</div>
+        <div class="feed" id="eventFeed"></div>
+      </section>
+    </main>
+
+    <script>
+      const cardsEl = document.getElementById("cards");
+      const updatedAtEl = document.getElementById("updatedAt");
+      const feedEl = document.getElementById("eventFeed");
+
+      const events = [];
+      const maxEvents = 500;
+      let shouldAutoScroll = true;
+
+      feedEl.addEventListener("scroll", () => {
+        const threshold = 24;
+        const distanceFromBottom = feedEl.scrollHeight - (feedEl.scrollTop + feedEl.clientHeight);
+        shouldAutoScroll = distanceFromBottom < threshold;
+      });
+
+      function formatTime(iso) {
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return "--:--:--";
+        return date.toLocaleTimeString([], { hour12: false });
+      }
+
+      function badgeClass(state, reachable) {
+        if (!reachable) return "unreachable";
+        return state;
+      }
+
+      function cardClass(state, reachable) {
+        if (!reachable) return "unreachable";
+        return state;
+      }
+
+      function hbClass(node) {
+        if (!node.reachable || node.state === "leader") return "";
+        if (node.msSinceLastHeartbeat > 1200) return "hb-red";
+        if (node.msSinceLastHeartbeat > 600) return "hb-amber";
+        return "";
+      }
+
+      function renderCards(nodes) {
+        const reachable = nodes.filter((node) => node.reachable);
+        const maxLogLength = reachable.reduce((max, node) => Math.max(max, node.logLength), 0);
+
+        cardsEl.innerHTML = nodes
+          .map((node) => {
+            const stateLabel = node.reachable ? node.state.toUpperCase() : "UNREACHABLE";
+            const lagging = node.reachable && node.logLength < maxLogLength;
+            const hbValue = node.reachable ? `${node.msSinceLastHeartbeat}ms` : "—";
+            const term = node.reachable ? node.currentTerm : "—";
+            const log = node.reachable ? `${node.logLength}${lagging ? " ⚠" : ""}` : "—";
+            const commit = node.reachable ? node.commitIndex : "—";
+            const leader = node.reachable ? node.leaderId || "—" : "—";
+
+            return `
+              <article class="card ${cardClass(node.state, node.reachable)}">
+                <div class="card-top">
+                  <h2 class="node-name">${node.replicaId}</h2>
+                  <span class="badge ${badgeClass(node.state, node.reachable)}">${stateLabel}</span>
+                </div>
+                <div class="meta">
+                  <div><span class="label">Term</span><span class="value">${term}</span></div>
+                  <div><span class="label">Log</span><span class="value">${log}</span></div>
+                  <div><span class="label">Commit</span><span class="value">${commit}</span></div>
+                  <div><span class="label">Leader</span><span class="value">${leader}</span></div>
+                  <div><span class="label">Heartbeat</span><span class="value ${hbClass(node)}">${hbValue}</span></div>
+                  <div><span class="label">URL</span><span class="value">${node.url}</span></div>
+                </div>
+              </article>
+            `;
+          })
+          .join("");
+      }
+
+      function eventClass(eventType) {
+        if (eventType.includes("ELECTION")) return "event-election";
+        if (eventType.includes("COMMIT") || eventType.includes("APPEND")) return "event-commit";
+        if (eventType.includes("UNREACHABLE") || eventType.includes("LOSS")) return "event-error";
+        return "muted";
+      }
+
+      function renderEvents() {
+        feedEl.innerHTML = events
+          .map(
+            (entry) => `
+              <div class="row">
+                <span class="muted">${formatTime(entry.timestamp)}</span>
+                <span>${entry.replicaId}</span>
+                <span class="${eventClass(entry.event)}">${entry.event}</span>
+                <span>${entry.message}</span>
+              </div>
+            `,
+          )
+          .join("");
+
+        if (shouldAutoScroll) {
+          feedEl.scrollTop = feedEl.scrollHeight;
+        }
+      }
+
+      async function refreshStatus() {
+        try {
+          const response = await fetch("/api/status");
+          const payload = await response.json();
+          renderCards(payload.nodes);
+          updatedAtEl.textContent = `Last updated: ${formatTime(payload.fetchedAt)}`;
+        } catch {
+          updatedAtEl.textContent = "Last updated: unavailable";
+        }
+      }
+
+      function connectEvents() {
+        const source = new EventSource("/api/events");
+
+        source.onmessage = (msg) => {
+          try {
+            const event = JSON.parse(msg.data);
+            events.push(event);
+            if (events.length > maxEvents) {
+              events.splice(0, events.length - maxEvents);
+            }
+            renderEvents();
+          } catch {
+            // Ignore malformed event payloads.
+          }
+        };
+
+        source.onerror = () => {
+          source.close();
+          setTimeout(connectEvents, 1200);
+        };
+      }
+
+      refreshStatus();
+      setInterval(refreshStatus, 1000);
+      connectEvents();
+    </script>
+  </body>
+</html>
