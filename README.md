@@ -345,14 +345,12 @@ docker compose down
    ```bash
    docker stop cc_mini-raft_project-replica1-1
    ```
-4. Draw more strokes — they should appear normally on the canvas. The remaining two replicas will elect a new leader and the gateway will discover it automatically.
+4. Draw more strokes — they should appear normally on the canvas. The remaining two replicas will elect a new leader, and the gateway will discover it automatically.
 5. Restart the dead replica:
    ```bash
    docker start cc_mini-raft_project-replica1-1
    ```
 6. The restarted replica will rejoin as a follower and sync its log via the catch-up mechanism.
-
-> **Note:** Always use `docker compose up -d` (detached mode) for failover testing. Running attached (`docker compose up`) will cause Docker Compose to shut down all containers when one is stopped.
 
 ---
 
