@@ -1,7 +1,7 @@
 # Project Status Report
 ## Distributed Real-Time Drawing Board with Mini-RAFT Consensus
 
-**Date:** March 26, 2026  
+**Date:** March 27, 2026  
 **Prepared for:** Project Team  
 **Status:** Functional — Core Consensus, Failover, and Observability All Operational
 
@@ -31,6 +31,7 @@ All critical failover issues identified in the previous report have been resolve
 - **Nodemon hot reload completed:** Gateway, replicas, and dashboard now run watch-mode dev scripts with automatic restart on TypeScript changes.
 - **Compose volume fix completed:** Services now bind-mount the monorepo root with isolated `/app/node_modules` to support stable Docker-based hot reload.
 - **Per-replica workspace split completed:** Replica service was split into `services/replica1`, `services/replica2`, `services/replica3` with unique workspace package names to avoid npm duplicate-workspace conflicts.
+- **Deployment env template completed:** Added root `.env.example` and migrated Compose service configuration to env-variable substitution with default fallbacks (no behavior change).
 
 ---
 
@@ -43,6 +44,7 @@ All critical failover issues identified in the previous report have been resolve
 - Three independent replica workspaces (`@mini-raft/replica1`, `@mini-raft/replica2`, `@mini-raft/replica3`) for isolated hot-reload behavior
 - 1 gateway + 3 replicas + 1 frontend + 1 dashboard topology
 - Docker Compose orchestration on shared network
+- Deployment-ready env configuration via root `.env.example` and Compose variable substitution
 
 ### 2.2 Frontend
 
@@ -127,10 +129,10 @@ All critical failover issues identified in the previous report have been resolve
 
 - No embedded automated benchmarks for latency/recovery targets.
 
-### 4.3 Hot-Reload Workflow Requirement Gap
+### 4.3 Deployment Hardening Follow-up
 
-- ✅ Resolved. Docker Compose and workspace scripts now support hot reload via nodemon across gateway, replicas, dashboard, and shared package edits.
-
+- Environment template and substitution are in place.
+- Secret management and environment-specific CI/CD injection are still externalized and not yet codified in this repo.
 ---
 
 ## 5) Risk Assessment (Current)
