@@ -179,13 +179,29 @@ flowchart TD
 
 ## Setup
 
-1. Install workspace dependencies:
+1. Create your environment file:
+
+  ```bash
+  cp .env.example .env
+  ```
+
+  On Windows PowerShell:
+
+  ```powershell
+  Copy-Item .env.example .env
+  ```
+
+  The defaults are production-safe for this topology and preserve the current behavior.
+
+  `docker-compose.yml` now uses environment-variable substitution with fallback defaults, so you can tune ports, peer maps, and RAFT timing via `.env` without editing source files.
+
+2. Install workspace dependencies:
 
    ```bash
    npm install
    ```
 
-2. Start all services:
+3. Start all services:
 
    ```bash
    docker compose up --build
@@ -193,12 +209,12 @@ flowchart TD
 
   After startup, gateway/replicas/dashboard run in watch mode with `nodemon`, so TypeScript changes under `services/*/src`, `dashboard/src`, and `packages/shared/src` trigger automatic restarts.
 
-3. Open the drawing app:
+4. Open the drawing app:
 
   - Frontend UI: http://localhost:3001/board.html
   - Dashboard UI: http://localhost:3001
 
-4. Open the service health endpoints (optional):
+5. Open the service health endpoints (optional):
 
   - Gateway health: http://localhost:3000/health
   - Gateway state: http://localhost:3000/state
@@ -210,7 +226,7 @@ flowchart TD
   - Replica3 status: http://localhost:4003/status
   - Dashboard aggregated status: http://localhost:3001/api/status
 
-5. Validate replication quickly:
+6. Validate replication quickly:
 
    - Open two browser tabs at `http://localhost:3001/board.html`.
    - Draw in one tab.
@@ -221,6 +237,12 @@ flowchart TD
 ```bash
 docker compose down
 ```
+
+## Deployment configuration note
+
+- `.env.example` is the deployment template for this project.
+- `.env` is ignored by git and should be environment-specific.
+- If `.env` is missing, Compose falls back to the same defaults used by the previous hardcoded implementation.
 
 ---
 
