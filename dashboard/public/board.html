@@ -121,6 +121,7 @@
         <button class="tool-button" data-tool="rect">Rectangle</button>
         <button class="tool-button" data-tool="circle">Circle</button>
         <button class="tool-button" data-tool="eraser">Eraser</button>
+        <button class="tool-button" data-tool="fill">Fill Bucket</button>
         <button class="tool-button" id="undoBtn" type="button">Undo</button>
         <button class="tool-button" id="redoBtn" type="button">Redo</button>
         <button class="tool-button" id="clearBtn" type="button">Clear</button>
@@ -258,6 +259,102 @@
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
       }
 
+      function hexToRgba(hex) {
+        let h = hex.replace('#', '');
+        if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+        const r = parseInt(h.substring(0,2), 16);
+        const g = parseInt(h.substring(2,4), 16);
+        const b = parseInt(h.substring(4,6), 16);
+        const a = h.length === 8 ? parseInt(h.substring(6,8), 16) : 255;
+        return [r, g, b, a];
+      }
+
+      function colorsMatch(data, pos, startR, startG, startB, startA) {
+        const tolerance = 64;
+        return Math.abs(data[pos] - startR) <= tolerance &&
+               Math.abs(data[pos + 1] - startG) <= tolerance &&
+               Math.abs(data[pos + 2] - startB) <= tolerance &&
+               Math.abs(data[pos + 3] - startA) <= tolerance;
+      }
+
+      function floodFill(context, startX, startY, fillColorHex) {
+        const fillRgba = hexToRgba(fillColorHex);
+        const cw = context.canvas.width;
+        const ch = context.canvas.height;
+        
+        const ratio = window.devicePixelRatio || 1;
+        startX = Math.floor(startX * ratio);
+        startY = Math.floor(startY * ratio);
+
+        if (startX < 0 || startX >= cw || startY < 0 || startY >= ch) return;
+        
+        const imageData = context.getImageData(0, 0, cw, ch);
+        const data = imageData.data;
+
+        const startPos = (startY * cw + startX) * 4;
+        const startR = data[startPos];
+        const startG = data[startPos + 1];
+        const startB = data[startPos + 2];
+        const startA = data[startPos + 3];
+
+        if (colorsMatch(data, startPos, fillRgba[0], fillRgba[1], fillRgba[2], fillRgba[3])) {
+          return;
+        }
+
+        const stack = [[startX, startY]];
+
+        while (stack.length > 0) {
+          const [x, y] = stack.pop();
+          let pos = (y * cw + x) * 4;
+
+          let cy = y;
+          while (cy >= 0 && colorsMatch(data, pos, startR, startG, startB, startA)) {
+            cy--;
+            pos -= cw * 4;
+          }
+
+          cy++;
+          pos += cw * 4;
+
+          let reachLeft = false;
+          let reachRight = false;
+
+          while (cy < ch && colorsMatch(data, pos, startR, startG, startB, startA)) {
+            data[pos] = fillRgba[0];
+            data[pos + 1] = fillRgba[1];
+            data[pos + 2] = fillRgba[2];
+            data[pos + 3] = fillRgba[3];
+
+            if (x > 0) {
+              if (colorsMatch(data, pos - 4, startR, startG, startB, startA)) {
+                if (!reachLeft) {
+                  stack.push([x - 1, cy]);
+                  reachLeft = true;
+                }
+              } else if (reachLeft) {
+                reachLeft = false;
+              }
+            }
+
+            if (x < cw - 1) {
+              if (colorsMatch(data, pos + 4, startR, startG, startB, startA)) {
+                if (!reachRight) {
+                  stack.push([x + 1, cy]);
+                  reachRight = true;
+                }
+              } else if (reachRight) {
+                reachRight = false;
+              }
+            }
+
+            cy++;
+            pos += cw * 4;
+          }
+        }
+
+        context.putImageData(imageData, 0, 0);
+      }
+
       function drawStroke(stroke, options = {}) {
         const tool = toolOf(stroke);
 
@@ -282,6 +379,12 @@
         }
 
         ctx.lineWidth = stroke.width || 3;
+
+        if (tool === "fill") {
+          ctx.restore();
+          floodFill(ctx, points[0].x, points[0].y, options.colorOverride || stroke.color || "#161616");
+          return;
+        }
 
         if (tool === "pen" || tool === "eraser") {
           if (points.length < 2) {
@@ -472,6 +575,11 @@
           tool: selectedTool,
           filled: fillShapes,
         };
+
+        if (selectedTool === "fill") {
+          queueStroke(currentStroke);
+          currentStroke = null;
+        }
       });
 
       canvas.addEventListener("pointermove", (e) => {
