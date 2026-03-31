@@ -18,7 +18,7 @@ export function loadConfig(): ReplicaConfig {
   const replicaId = process.env.REPLICA_ID || "replica1";
   const port = Number(process.env.PORT || "4001");
   const peers = parseReplicaMap(process.env.PEERS || "");
-  const gatewayUrl = process.env.GATEWAY_URL || "http://localhost:3000";
+  const gatewayUrl = process.env.GATEWAY_URL || "http://localhost:3010";
 
   return {
     replicaId,

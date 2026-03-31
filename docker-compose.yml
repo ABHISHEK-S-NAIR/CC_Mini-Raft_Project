@@ -4,9 +4,9 @@ services:
       context: .
       dockerfile: services/gateway/Dockerfile
     ports:
-      - "3000:3000"
+      - "3010:3010"
     environment:
-      GATEWAY_PORT: "3000"
+      GATEWAY_PORT: "3010"
       REPLICA_MAP: "replica1=http://replica1:4001,replica2=http://replica2:4002,replica3=http://replica3:4003"
     depends_on:
       - replica1
@@ -26,7 +26,7 @@ services:
       REPLICA_ID: "replica1"
       PORT: "4001"
       PEERS: "replica2=http://replica2:4002,replica3=http://replica3:4003"
-      GATEWAY_URL: "http://gateway:3000"
+      GATEWAY_URL: "http://gateway:3010"
       HEARTBEAT_INTERVAL_MS: "150"
       ELECTION_TIMEOUT_MIN_MS: "500"
       ELECTION_TIMEOUT_MAX_MS: "800"
@@ -47,7 +47,7 @@ services:
       REPLICA_ID: "replica2"
       PORT: "4002"
       PEERS: "replica1=http://replica1:4001,replica3=http://replica3:4003"
-      GATEWAY_URL: "http://gateway:3000"
+      GATEWAY_URL: "http://gateway:3010"
       HEARTBEAT_INTERVAL_MS: "150"
       ELECTION_TIMEOUT_MIN_MS: "500"
       ELECTION_TIMEOUT_MAX_MS: "800"
@@ -68,7 +68,7 @@ services:
       REPLICA_ID: "replica3"
       PORT: "4003"
       PEERS: "replica1=http://replica1:4001,replica2=http://replica2:4002"
-      GATEWAY_URL: "http://gateway:3000"
+      GATEWAY_URL: "http://gateway:3010"
       HEARTBEAT_INTERVAL_MS: "150"
       ELECTION_TIMEOUT_MIN_MS: "500"
       ELECTION_TIMEOUT_MAX_MS: "800"
@@ -89,7 +89,7 @@ services:
       - "3001:3001"
     environment:
       DASHBOARD_PORT: "3001"
-      REPLICA_URLS: "http://gateway:3000,http://replica1:4001,http://replica2:4002,http://replica3:4003"
+      REPLICA_URLS: "http://gateway:3010,http://replica1:4001,http://replica2:4002,http://replica3:4003"
     depends_on:
       - replica1
       - replica2
