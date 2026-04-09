@@ -11,9 +11,16 @@ type TextOverlayProps = {
 
 export function TextOverlay({ position, fontSize, color, onCommit, onCancel }: TextOverlayProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const readyRef = useRef(false);
 
   useEffect(() => {
-    ref.current?.focus();
+    // Delay focus until after the pointer event sequence that triggered
+    // this overlay completes — browsers defer focus during active pointers.
+    const id = requestAnimationFrame(() => {
+      ref.current?.focus();
+      readyRef.current = true;
+    });
+    return () => cancelAnimationFrame(id);
   }, []);
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -29,6 +36,7 @@ export function TextOverlay({ position, fontSize, color, onCommit, onCancel }: T
   }
 
   function handleBlur() {
+    if (!readyRef.current) return;
     const value = ref.current?.value.trim();
     if (value) onCommit(value);
     else onCancel();
@@ -47,6 +55,7 @@ export function TextOverlay({ position, fontSize, color, onCommit, onCancel }: T
       }}
       onKeyDown={handleKeyDown}
       onBlur={handleBlur}
+      onPointerDown={(e) => e.stopPropagation()}
       rows={1}
     />
   );

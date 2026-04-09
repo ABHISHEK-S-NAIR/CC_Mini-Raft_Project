@@ -7,8 +7,6 @@ type ToolDef = {
 };
 
 const TOOL_ITEMS: ToolDef[] = [
-  { icon: "icons/freeFormSelector.png", alt: "Free-form select" },
-  { icon: "icons/rectangularSelector.png", alt: "Rectangular select" },
   { icon: "icons/eraserTool.png", alt: "Eraser", tool: "eraser" },
   { icon: "icons/paintBucketTool.png", alt: "Fill", tool: "fill" },
   { icon: "icons/eyeDropperTool.png", alt: "Color picker", tool: "eyedropper" },

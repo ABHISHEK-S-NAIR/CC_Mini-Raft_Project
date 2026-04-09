@@ -133,6 +133,11 @@ body {
   outline-offset: -1px;
 }
 
+.board-menu-title {
+  margin-left: auto;
+  margin-right: 16px;
+}
+
 .board-workspace {
   flex: 1;
   display: flex;
@@ -412,16 +417,20 @@ body {
 }
 
 .board-status-seg {
-  padding: 2px 8px;
+  padding: 4px 8px;
   display: flex;
   align-items: center;
   border-right: 2px solid;
   border-color: var(--win-sunken);
 }
 
-.board-status-seg:last-child {
-  border-right: none;
-  flex: 1;
+.board-status-seg-right {
+  padding: 2px 8px;
+  display: flex;
+  align-items: center;
+  border-left: 2px solid;
+  border-color: var(--win-sunken);
+  margin-left: auto;
 }
 
 .board-modal-backdrop {

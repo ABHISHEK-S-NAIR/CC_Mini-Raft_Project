@@ -26,6 +26,8 @@ export function App() {
 
   // Text tool state
   const [textInput, setTextInput] = useState<{ position: Point; fontSize: number } | null>(null);
+  const textInputRef = useRef(textInput);
+  textInputRef.current = textInput;
 
   // Track previous tool for eyedropper revert
   const previousToolRef = useRef<BoardTool>("pen");
@@ -55,7 +57,10 @@ export function App() {
       setActiveTool(previousToolRef.current);
     },
     onTextStart: (position, fontSize) => {
-      setTextInput({ position, fontSize });
+      if (textInputRef.current) {
+        setTextInput(null);
+      }
+      requestAnimationFrame(() => setTextInput({ position, fontSize }));
     },
     onZoomChange: setZoomLevel,
   });

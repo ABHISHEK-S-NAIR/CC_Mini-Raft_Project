@@ -6,7 +6,7 @@ type MenuItem = {
   label: string;
   closeMenu: boolean;
   disabled?: boolean;
-  prefix?: string;
+  suffix?: string;
   onClick: () => void;
 };
 
@@ -68,7 +68,7 @@ export function MenuBar(props: MenuBarProps) {
         {
           label: "Fill Shapes",
           closeMenu: false,
-          prefix: fillShapes ? "✓ " : "",
+          suffix: fillShapes ? "✓ " : "",
           onClick: onEditToggleFill,
         },
       ],
@@ -133,8 +133,7 @@ export function MenuBar(props: MenuBarProps) {
                     disabled={item.disabled}
                     onClick={() => runItem(item.closeMenu, item.onClick)}
                   >
-                    {item.prefix}
-                    {item.label}
+                    {item.label} {item.suffix}
                   </button>
                 </li>
               ))}
@@ -142,6 +141,9 @@ export function MenuBar(props: MenuBarProps) {
           ) : null}
         </div>
       ))}
+      <div className="board-menu-title">
+        Mini Raft Paint 98
+      </div>
     </nav>
   );
 }

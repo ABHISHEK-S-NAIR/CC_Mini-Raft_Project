@@ -249,8 +249,7 @@ function drawText(
   const size = stroke.fontSize ?? DEFAULT_FONT_SIZE;
   const color = resolveColor(stroke, opts);
   const { x, y } = stroke.points[0];
-
-  ctx.font = `${size}px "MS Sans Serif", Tahoma, "Segoe UI", sans-serif`;
+  ctx.font = `${size}px "Microsoft Sans Serif", Tahoma, Arial, sans-serif`;
   ctx.fillStyle = color;
   ctx.textBaseline = "top";
 
