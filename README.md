@@ -72,7 +72,9 @@ flowchart TD
 
 ### Frontend
 
-- Location: `dashboard/public/board.html`
+- Location: React + Vite source under `dashboard/src/board/`; production build writes `dashboard/dist/client/board.html` and hashed assets under `dashboard/dist/client/assets/`.
+- Local UI development: `npm run dev:client -w @mini-raft/dashboard` (Vite on port `5174`, WebSocket still targets the gateway on port `3000`). Run `npm run build -w @mini-raft/dashboard` before relying on Express alone to serve the latest board.
+- Toolbar icon paths are listed in `dashboard/src/board/components/Toolbar.tsx` (resolved as `/icons/*` from `dashboard/public/icons/`).
 - Provides a canvas and pointer-based drawing.
 - Opens a WebSocket connection to the gateway (`/ws` on port `3000`).
 - Displays:
@@ -142,10 +144,24 @@ flowchart TD
 │           └── logger.ts
 ├── dashboard/
 │   ├── src/
-│   │   └── index.ts
+│   │   ├── index.ts
+│   │   └── board/
+│   │       ├── App.tsx
+│   │       ├── main.tsx
+│   │       ├── board.css
+│   │       ├── constants.ts
+│   │       ├── components/
+│   │       ├── types.ts
+│   │       └── useBoardEngine.ts
+│   ├── board.html              ← Vite entry (dev + build input)
+│   ├── vite.config.ts
+│   ├── tsconfig.board.json
+│   ├── dist/client/             ← Vite build output (gitignored)
+│   │   ├── board.html
+│   │   └── assets/
 │   └── public/
 │       ├── index.html
-│       └── board.html
+│       └── icons/
 ├── services/
 │   ├── gateway/
 │   │   └── src/index.ts
