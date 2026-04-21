@@ -133,6 +133,15 @@ export class MiniRaftNode {
       this.becomeFollower(req.term, `Stepped down - higher term seen | Term: ${req.term}`);
     }
 
+    const lastLogIndex = this.log.length;
+    const lastLogTerm = lastLogIndex === 0 ? 0 : this.log[lastLogIndex - 1].term;
+    const isLogUpToDate = req.lastLogTerm > lastLogTerm || (req.lastLogTerm === lastLogTerm && req.lastLogIndex >= lastLogIndex);
+
+    if (!isLogUpToDate) {
+      this.logger.log("VOTE_DENIED", `Denied vote to ${req.candidateId} - log not up-to-date`);
+      return { term: this.currentTerm, voteGranted: false };
+    }
+
     const alreadyVoted = this.votedFor && this.votedFor !== req.candidateId;
     if (alreadyVoted) {
       return { term: this.currentTerm, voteGranted: false };
