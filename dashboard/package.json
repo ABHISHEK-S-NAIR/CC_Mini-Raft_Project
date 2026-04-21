@@ -1,0 +1,30 @@
+{
+  "name": "@mini-raft/dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "nodemon -L --watch src --watch ../packages/shared/src --ext ts --exec \"tsx src/index.ts\"",
+    "dev:client": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "build:client": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.board.json --noEmit"
+  },
+  "dependencies": {
+    "@mini-raft/shared": "1.0.0",
+    "express": "^4.21.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "nodemon": "^3.1.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3"
+  }
+}

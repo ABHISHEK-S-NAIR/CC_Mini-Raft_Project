@@ -19,6 +19,10 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, ...node.getSnapshot() });
 });
 
+app.get("/status", (_req, res) => {
+  res.json(node.getStatus());
+});
+
 app.get("/debug/log", (_req, res) => {
   res.json({ entries: node.getLog() });
 });
@@ -50,11 +54,10 @@ app.post("/sync-log", (req, res) => {
 app.post("/stroke", async (req, res) => {
   const body = req.body as StrokeIngressRequest;
   if (!node.isLeader()) {
+    const hint = node.getLeaderHint();
     return res.status(409).json({
-      accepted: false,
-      committed: false,
-      leaderHint: node.getLeaderHint(),
-      logIndex: undefined,
+      success: false,
+      leaderHint: hint === "unknown" ? null : hint,
     });
   }
 
@@ -68,5 +71,4 @@ app.post("/stroke", async (req, res) => {
 
 app.listen(config.port, () => {
   node.start();
-  console.log(`Replica ${config.replicaId} listening on :${config.port}`);
 });
