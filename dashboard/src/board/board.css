@@ -78,9 +78,9 @@ body {
 
 .board-menu-dropdown-panel {
   position: absolute;
-  top: 100%;
+  top: 140%;
   left: 0;
-  z-index: 50;
+  z-index: 400;
 }
 
 .board-app {
@@ -125,7 +125,8 @@ body {
 .board-menu-label:focus-visible {
   background: var(--win-bevel-face);
   border: 2px solid;
-  border-color: var(--win-sunken);
+  border-color: var(--win-raised);
+  z-index: 1;
 }
 
 .board-menu-label:focus-visible {
